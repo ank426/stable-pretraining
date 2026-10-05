@@ -161,38 +161,33 @@ cpu_val_t = transforms.Compose(
 
 # GPU side: same six aug ops, batched. StackedMultiView fans out 2 views.
 train_aug = gt.StackedMultiView(
-    gt.GPUCompose(
-        [
-            gt.GPURandomResizedCrop(size=224, scale=(0.08, 1.0)),
-            gt.GPURandomHorizontalFlip(p=0.5),
-            gt.GPUColorJitter(0.4, 0.4, 0.2, 0.1, p=0.8),
-            gt.GPURandomGrayscale(p=0.2),
-            gt.GPUGaussianBlur(kernel_size=23, p=0.5),
-            gt.GPUNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
+    gt.GPUCompose([
+        gt.GPURandomResizedCrop(size=224, scale=(0.08, 1.0)),
+        gt.GPURandomHorizontalFlip(p=0.5),
+        gt.GPUColorJitter(0.4, 0.4, 0.2, 0.1, p=0.8),
+        gt.GPURandomGrayscale(p=0.2),
+        gt.GPUGaussianBlur(kernel_size=23, p=0.5),
+        gt.GPUNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]),
     n_views=2,
 )
 
 # Each dataset owns its own GPU aug — train and val differ for free.
 train_ds = spt.data.HFDataset(
-    "frgfm/imagenette",
-    split="train",
-    transform=cpu_train_t,
-    gpu_transform=train_aug,
+    "frgfm/imagenette", split="train",
+    transform=cpu_train_t, gpu_transform=train_aug,
 )
 val_ds = spt.data.HFDataset(
-    "frgfm/imagenette",
-    split="validation",
+    "frgfm/imagenette", split="validation",
     transform=cpu_val_t,  # no gpu_transform — val is already normalized on CPU
 )
 
 dm = spt.data.DataModule(
     train=DataLoader(train_ds, batch_size=256, num_workers=8, pin_memory=True),
-    val=DataLoader(val_ds, batch_size=256, num_workers=8, pin_memory=True),
+    val=DataLoader(val_ds,   batch_size=256, num_workers=8, pin_memory=True),
 )
-module = BarlowTwins(...)  # unchanged
-trainer.fit(module, dm)  # unchanged
+module = BarlowTwins(...)              # unchanged
+trainer.fit(module, dm)                # unchanged
 ```
 
 Resolution order in ``Module.on_after_batch_transfer`` (first match wins):
