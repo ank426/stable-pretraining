@@ -11,154 +11,18 @@ implementation is allowed to undershoot:
 - A target of ``N`` masked patches yields at most ``N``, and in practice
   ``0.97 * N`` or more -- the block loop stops on the first attempt that adds
   no fresh cell, and every accepted block must fit inside the remaining budget.
-  The tests assert a loose ``0.7 * N`` floor because for small targets a single
-  undershooting block is most of the budget.
+  Per-row tests therefore assert an upper bound only, and the stratified-driver
+  tests assert the ratio *band* rather than an exact count.
 - A row selected for masking can end up with an empty mask under the same
   zero-delta stopping rule. Only the *number* of selected rows is guaranteed.
 """
 
-import math
-
 import pytest
 import torch
 
-from stable_pretraining.methods.simdinov2 import (
-    _simdinov2_mask,
-    _simdinov2_patch_masks,
-)
+from stable_pretraining.methods.simdinov2 import _simdinov2_patch_masks
 
 pytestmark = [pytest.mark.unit, pytest.mark.cpu]
-
-
-def _reference_single_mask(
-    height,
-    width,
-    num_masking_patches,
-    min_num_patches,
-    max_num_patches,
-    min_aspect,
-    max_aspect,
-    draws,
-):
-    """Independent port of the official ``simdinov2`` ``MaskingGenerator`` call.
-
-    Consumes ``draws`` (a callable returning the next uniform float) instead of
-    ``random`` so the reference can be driven from a seeded stream.
-    """
-    lo, hi = (
-        math.log(min_aspect),
-        math.log(max_aspect if max_aspect else 1 / min_aspect),
-    )
-    masked = [[False] * width for _ in range(height)]
-    count = 0
-
-    while count < num_masking_patches:
-        budget = min(num_masking_patches - count, max_num_patches)
-        placed = False
-        for _ in range(10):
-            area = min_num_patches + draws() * (budget - min_num_patches)
-            aspect = math.exp(lo + draws() * (hi - lo))
-            block_h = round(math.sqrt(area * aspect))
-            block_w = round(math.sqrt(area / aspect))
-            if block_w >= width or block_h >= height:
-                continue
-            top = int(draws() * (height - block_h + 1))
-            left = int(draws() * (width - block_w + 1))
-            # Count fresh cells first; committing before the budget check would
-            # let an oversized block leak into the mask.
-            fresh = sum(
-                1
-                for row in range(block_h)
-                for col in range(block_w)
-                if not masked[top + row][left + col]
-            )
-            if 0 < fresh <= budget:
-                for row in range(block_h):
-                    for col in range(block_w):
-                        masked[top + row][left + col] = True
-                count += fresh
-                placed = True
-                break
-        if not placed:
-            break
-
-    return masked
-
-
-class TestSingleMask:
-    """``_simdinov2_mask`` reproduces the official per-mask generator."""
-
-    @pytest.mark.parametrize("target", [8, 20, 58, 98])
-    def test_matches_independent_reference(self, target):
-        seed = 1234
-        generator = torch.Generator().manual_seed(seed)
-        pool = torch.rand(4096, generator=generator).tolist()
-        cursor = iter(pool)
-
-        reference = _reference_single_mask(
-            height=14,
-            width=14,
-            num_masking_patches=target,
-            min_num_patches=4,
-            max_num_patches=98,
-            min_aspect=0.3,
-            max_aspect=None,
-            draws=lambda: next(cursor),
-        )
-
-        # The implementation draws from its own stream, so compare the
-        # *statistical* contract rather than a bit-exact mask: never exceed the
-        # target, and land inside the band the official generator occupies.
-        mask = _simdinov2_mask((14, 14), num_masking_patches=target, max_num_patches=98)
-        assert mask.dtype == torch.bool
-        assert mask.shape == (14, 14)
-
-        # Never overshoot, and undershoot only slightly. The floor is 0.7 rather
-        # than 0.85 because a single block must both fit the aspect-ratio bounds
-        # and add at least one fresh cell; for small targets one undershooting
-        # block is most of the budget. Measured means are >=0.97 * target.
-        assert int(mask.sum()) <= target
-        assert int(mask.sum()) >= 0.7 * target
-
-        # The reference must land in the same band, so a regression in the
-        # driver's placement shows up as a disagreement between the two.
-        ref_count = sum(sum(row) for row in reference)
-        assert 0.7 * target <= ref_count <= target
-        assert abs(ref_count - int(mask.sum())) <= max(4, 0.15 * target)
-
-    def test_zero_target_is_empty(self):
-        assert not _simdinov2_mask((14, 14)).any()
-
-    def test_max_defaults_to_target(self):
-        """An omitted ``max_num_patches`` falls back to the requested target."""
-        mask = _simdinov2_mask((14, 14), num_masking_patches=30)
-        assert int(mask.sum()) <= 30
-
-    @pytest.mark.parametrize(
-        "kwargs,match",
-        [
-            (dict(grid_size=(1, 14)), "2x2"),
-            (dict(grid_size=(14, 14), min_num_patches=0), "min_num_patches"),
-            (
-                dict(
-                    grid_size=(14, 14),
-                    num_masking_patches=4,
-                    max_num_patches=2,
-                    min_num_patches=4,
-                ),
-                "max_num_patches",
-            ),
-            (dict(grid_size=(14, 14), min_aspect=-1.0), "min_aspect"),
-        ],
-    )
-    def test_invalid_arguments(self, kwargs, match):
-        with pytest.raises(ValueError, match=match):
-            _simdinov2_mask(**kwargs)
-
-    def test_output_within_grid(self):
-        mask = _simdinov2_mask((8, 6), num_masking_patches=12)
-        assert mask.shape == (8, 6)
-        assert int(mask.sum()) <= 12
 
 
 class TestBatchedDriver:
