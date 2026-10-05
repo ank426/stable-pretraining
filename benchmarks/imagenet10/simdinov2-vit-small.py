@@ -73,9 +73,9 @@ def make_simdinov2_data(
 
 
 def main():
-    batch_size = int(os.environ.get("BATCH_SIZE", 128))
+    batch_size = int(os.environ.get("BATCH_SIZE", 32))
     max_epochs = int(os.environ.get("MAX_EPOCHS", 20))
-    num_workers = int(os.environ.get("NUM_WORKERS", 8))
+    num_workers = int(os.environ.get("NUM_WORKERS", 4))
 
     data = make_simdinov2_data(
         batch_size=batch_size, num_workers=num_workers, n_global=2, n_local=6
