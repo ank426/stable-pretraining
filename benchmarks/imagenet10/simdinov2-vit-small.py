@@ -1,15 +1,75 @@
 """SimDINOv2 ViT-S/16 on ImageNet-10 (Imagenette). 20 epochs, 1 GPU, no W&B."""
 
 import os
+from pathlib import Path
+import sys
+
+import torch
+import torchvision.datasets as dset
+
+sys.path.append(str(Path(__file__).parent))
 from multicrop import (
+    _global_t,
+    _local_t,
     attach_forward_and_optim,
-    make_imagenette_data,
     standard_callbacks,
     standard_trainer,
+    val_transform,
 )
+from utils import get_data_dir
 
 import stable_pretraining as spt
+from stable_pretraining.data import transforms
 from stable_pretraining.methods.simdinov2 import SimDINOv2
+
+
+class _ImagenetteDictDataset(torch.utils.data.Dataset):
+    """Dictionary-wrapped Imagenette dataset compatible with MultiViewTransform."""
+
+    def __init__(self, root: str, split: str, transform=None):
+        self.ds = dset.Imagenette(root, split=split, size="320px", download=True)
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def __getitem__(self, idx: int) -> dict:
+        img, label = self.ds[idx]
+        sample = {"image": img, "label": label}
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return sample
+
+
+def make_simdinov2_data(
+    batch_size: int = 128, num_workers: int = 8, n_global: int = 2, n_local: int = 6
+):
+    data_dir = str(get_data_dir("imagenet10"))
+    train_t = transforms.MultiViewTransform(
+        {
+            **{f"global_{i}": _global_t() for i in range(n_global)},
+            **{f"local_{i}": _local_t() for i in range(n_local)},
+        }
+    )
+    train_ds = _ImagenetteDictDataset(data_dir, split="train", transform=train_t)
+    val_ds = _ImagenetteDictDataset(data_dir, split="val", transform=val_transform())
+
+    return spt.data.DataModule(
+        train=torch.utils.data.DataLoader(
+            dataset=train_ds,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            drop_last=True,
+            persistent_workers=num_workers > 0,
+            shuffle=True,
+        ),
+        val=torch.utils.data.DataLoader(
+            dataset=val_ds,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            persistent_workers=num_workers > 0,
+        ),
+    )
 
 
 def main():
@@ -17,7 +77,7 @@ def main():
     max_epochs = int(os.environ.get("MAX_EPOCHS", 20))
     num_workers = int(os.environ.get("NUM_WORKERS", 8))
 
-    data = make_imagenette_data(
+    data = make_simdinov2_data(
         batch_size=batch_size, num_workers=num_workers, n_global=2, n_local=6
     )
 

@@ -445,8 +445,7 @@ class SimDINOv2(Module):
             and base.cls_token is not None
             and seq.shape[1] > 1
         )
-        embed_dim = seq.shape[-1]
-        self.embed_dim = embed_dim
+        self.embed_dim = seq.shape[-1]
 
         self.backbone = TeacherStudentWrapper(
             base,
@@ -456,7 +455,7 @@ class SimDINOv2(Module):
         )
         self.cls_head = TeacherStudentWrapper(
             _cosine_projector(
-                embed_dim, projector_hidden_dim, projector_bottleneck_dim
+                self.embed_dim, projector_hidden_dim, projector_bottleneck_dim
             ),
             warm_init=True,
             base_ema_coefficient=ema_decay_start,
@@ -464,14 +463,14 @@ class SimDINOv2(Module):
         )
         self.patch_head = TeacherStudentWrapper(
             _cosine_projector(
-                embed_dim, projector_hidden_dim, projector_bottleneck_dim
+                self.embed_dim, projector_hidden_dim, projector_bottleneck_dim
             ),
             warm_init=True,
             base_ema_coefficient=ema_decay_start,
             final_ema_coefficient=ema_decay_end,
         )
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         nn.init.trunc_normal_(self.mask_token, std=0.02)
 
         if loss is None:
