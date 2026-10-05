@@ -314,6 +314,66 @@ class TestEndToEndWithLoss:
         assert gathered.shape == (int(masks.sum()), 8)
         assert torch.equal(gathered, expected)
 
+    def test_multicrop_multiresolution_forward_and_ema_update(self):
+        """SimDINOv2 handles 2 globals + 4 locals, backprops, and updates via EMA."""
+        from timm.models.vision_transformer import VisionTransformer
+        import stable_pretraining as spt
+        from stable_pretraining.callbacks import TeacherStudentCallback
+
+        enc = VisionTransformer(
+            img_size=32,
+            patch_size=8,
+            embed_dim=24,
+            depth=2,
+            num_heads=3,
+            num_classes=0,
+            dynamic_img_size=True,
+        )
+        model = spt.SimDINOv2(encoder_name=enc, image_size=32)
+        model.train()
+
+        b = 2
+        globals_ = [torch.randn(b, 3, 32, 32, requires_grad=True) for _ in range(2)]
+        locals_ = [torch.randn(b, 3, 16, 16, requires_grad=True) for _ in range(4)]
+
+        output = model(global_views=globals_, local_views=locals_)
+        assert torch.isfinite(output.loss)
+        assert output.embedding.shape == (2 * b, 24)
+        assert output.loss_cls is not None
+        assert output.loss_patch is not None
+        assert output.comp_loss is not None
+        assert output.expa_loss is not None
+
+        output.loss.backward()
+        for g in globals_:
+            assert g.grad is not None and g.grad.abs().sum() > 0
+        for loc in locals_:
+            assert loc.grad is not None and loc.grad.abs().sum() > 0
+
+        # TeacherStudentCallback discovers wrappers and updates teacher params
+        cb = TeacherStudentCallback()
+
+        class DummyTrainer:
+            global_step = 0
+            current_epoch = 0
+            max_epochs = 10
+            estimated_stepping_batches = 100
+
+        trainer = DummyTrainer()
+        cb.on_fit_start(trainer, model)
+        old_teacher_weight = next(model.backbone.teacher.parameters()).clone()
+
+        # Perturb student weights so teacher EMA update has a non-zero delta
+        with torch.no_grad():
+            for p in model.backbone.student.parameters():
+                p.add_(1.0)
+
+        trainer.global_step = 1
+        cb.on_train_batch_end(trainer, model, outputs={}, batch={}, batch_idx=0)
+        new_teacher_weight = next(model.backbone.teacher.parameters())
+        diff = (new_teacher_weight - old_teacher_weight).abs().max().item()
+        assert diff > 0
+
 
 def _gen(seed):
     return torch.Generator().manual_seed(seed)
