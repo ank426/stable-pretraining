@@ -35,6 +35,7 @@ methods are flagged with the reason they collapse.
 | 17 | **MSN**            | masked-siamese                 | 50.6% | 57.6% | ✓ |
 | 18 | **DINOv3**         | DINOv2 + registers + KoLeo     | 35.9% | 41.4% | running (mc restart, ep 37) |
 | 19 | **DINOv2**         | DINO + iBOT + Sinkhorn         | 29.6% | 37.2% | running (mc restart, ep 37) |
+|  - | **SimDINOv2**      | self-distill (comp + expa)     | 30.8% | 25.2% | 5 ep (verification run) |
 | 20 | **TiCO**           | EMA-cov contrast (LARS)        | 23.7% | 33.7% | ✓ |
 | 21 | **IJEPA**          | predictive (joint embedding)   | 33.2% | 34.0% | ✓ |
 | 22 | **Data2Vec**       | EMA contextual features        | 31.0% | 26.3% | ✓ |
@@ -61,6 +62,7 @@ size used in this sweep. Key choices:
 | BYOL, Barlow Twins | AdamW for ViT-S (paper used LARS for ResNet50) | 5e-4 | LARS collapses on ViT |
 | SwAV | AdamW, multi-crop 2×224 + 4×96 | 5e-4 | paper uses 6×96; truncated |
 | DINO, DINOv2, DINOv3 | AdamW, multi-crop 2×224 + 6×96 | 5e-4 | DINOv2 / v3 use Sinkhorn |
+| SimDINOv2 | AdamW, multi-crop 2×224 + 6×96 | 5e-4 | comp + expa + masked patch (no prototypes) |
 | LeJEPA | AdamW, multi-view 8 crops, SIGReg | 4e-4 | paper exact |
 | VISReg | AdamW, multi-view 8 crops, VISReg | 1e-3 | paper exact |
 | MoCo v2 | AdamW (ViT-tuned vs. paper SGD) | 1.5e-4 | adapted for ViT |
@@ -159,33 +161,38 @@ cpu_val_t = transforms.Compose(
 
 # GPU side: same six aug ops, batched. StackedMultiView fans out 2 views.
 train_aug = gt.StackedMultiView(
-    gt.GPUCompose([
-        gt.GPURandomResizedCrop(size=224, scale=(0.08, 1.0)),
-        gt.GPURandomHorizontalFlip(p=0.5),
-        gt.GPUColorJitter(0.4, 0.4, 0.2, 0.1, p=0.8),
-        gt.GPURandomGrayscale(p=0.2),
-        gt.GPUGaussianBlur(kernel_size=23, p=0.5),
-        gt.GPUNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]),
+    gt.GPUCompose(
+        [
+            gt.GPURandomResizedCrop(size=224, scale=(0.08, 1.0)),
+            gt.GPURandomHorizontalFlip(p=0.5),
+            gt.GPUColorJitter(0.4, 0.4, 0.2, 0.1, p=0.8),
+            gt.GPURandomGrayscale(p=0.2),
+            gt.GPUGaussianBlur(kernel_size=23, p=0.5),
+            gt.GPUNormalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
     n_views=2,
 )
 
 # Each dataset owns its own GPU aug — train and val differ for free.
 train_ds = spt.data.HFDataset(
-    "frgfm/imagenette", split="train",
-    transform=cpu_train_t, gpu_transform=train_aug,
+    "frgfm/imagenette",
+    split="train",
+    transform=cpu_train_t,
+    gpu_transform=train_aug,
 )
 val_ds = spt.data.HFDataset(
-    "frgfm/imagenette", split="validation",
+    "frgfm/imagenette",
+    split="validation",
     transform=cpu_val_t,  # no gpu_transform — val is already normalized on CPU
 )
 
 dm = spt.data.DataModule(
     train=DataLoader(train_ds, batch_size=256, num_workers=8, pin_memory=True),
-    val=DataLoader(val_ds,   batch_size=256, num_workers=8, pin_memory=True),
+    val=DataLoader(val_ds, batch_size=256, num_workers=8, pin_memory=True),
 )
-module = BarlowTwins(...)              # unchanged
-trainer.fit(module, dm)                # unchanged
+module = BarlowTwins(...)  # unchanged
+trainer.fit(module, dm)  # unchanged
 ```
 
 Resolution order in ``Module.on_after_batch_transfer`` (first match wins):
