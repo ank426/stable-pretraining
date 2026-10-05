@@ -446,6 +446,7 @@ class SimDINOv2(Module):
             and seq.shape[1] > 1
         )
         embed_dim = seq.shape[-1]
+        self.embed_dim = embed_dim
 
         self.backbone = TeacherStudentWrapper(
             base,

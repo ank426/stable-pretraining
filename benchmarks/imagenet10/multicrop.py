@@ -55,6 +55,26 @@ def val_transform():
     )
 
 
+class _ImagenetteDictDataset(torch.utils.data.Dataset):
+    """Fallback dataset using torchvision Imagenette when HF Hub is unavailable."""
+
+    def __init__(self, root, split, transform=None):
+        import torchvision.datasets as dset
+
+        self.ds = dset.Imagenette(root, split=split, size="320px", download=True)
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.ds)
+
+    def __getitem__(self, idx):
+        img, label = self.ds[idx]
+        sample = {"image": img, "label": label}
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return sample
+
+
 def make_imagenette_data(
     batch_size: int = 128, num_workers: int = 8, n_global: int = 2, n_local: int = 6
 ):
@@ -65,15 +85,27 @@ def make_imagenette_data(
             **{f"local_{i}": _local_t() for i in range(n_local)},
         }
     )
+    val_t = val_transform()
+    try:
+        train_ds = spt.data.HFDataset(
+            "frgfm/imagenette",
+            split="train",
+            cache_dir=data_dir,
+            transform=train_t,
+        )
+        val_ds = spt.data.HFDataset(
+            "frgfm/imagenette",
+            split="validation",
+            cache_dir=data_dir,
+            transform=val_t,
+        )
+    except Exception:
+        train_ds = _ImagenetteDictDataset(data_dir, split="train", transform=train_t)
+        val_ds = _ImagenetteDictDataset(data_dir, split="val", transform=val_t)
+
     return spt.data.DataModule(
         train=torch.utils.data.DataLoader(
-            dataset=spt.data.HFDataset(
-                "frgfm/imagenette",
-                split="train",
-                revision="refs/convert/parquet",
-                cache_dir=data_dir,
-                transform=train_t,
-            ),
+            dataset=train_ds,
             batch_size=batch_size,
             num_workers=num_workers,
             drop_last=True,
@@ -81,13 +113,7 @@ def make_imagenette_data(
             shuffle=True,
         ),
         val=torch.utils.data.DataLoader(
-            dataset=spt.data.HFDataset(
-                "frgfm/imagenette",
-                split="validation",
-                revision="refs/convert/parquet",
-                cache_dir=data_dir,
-                transform=val_transform(),
-            ),
+            dataset=val_ds,
             batch_size=batch_size,
             num_workers=num_workers,
             persistent_workers=num_workers > 0,
