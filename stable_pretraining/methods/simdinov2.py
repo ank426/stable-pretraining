@@ -224,7 +224,8 @@ def _simdinov2_patch_masks(
     ratio_min, ratio_max = mask_ratio_min_max
     if not 0 < ratio_min <= ratio_max <= 1:
         raise ValueError(
-            f"mask_ratio_min_max must satisfy 0 < min <= max <= 1, got {mask_ratio_min_max}"
+            "mask_ratio_min_max must satisfy 0 < min <= max <= 1, "
+            f"got {mask_ratio_min_max}"
         )
     if not 0.0 <= mask_sample_probability <= 1.0:
         raise ValueError(
@@ -504,7 +505,8 @@ class SimDINOv2(Module):
         """
         with torch.no_grad():
             pe = base.patch_embed(torch.zeros(1, 3, image_size, image_size))
-        # ``dynamic_img_size=True`` returns [B, H', W', D]; flat models return [B, N, D].
+        # ``dynamic_img_size=True`` returns [B, H', W', D];
+        # flat models return [B, N, D].
         if pe.ndim == 4:
             return pe.shape[1], pe.shape[2]
         n = pe.shape[1]

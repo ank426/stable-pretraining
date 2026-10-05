@@ -316,7 +316,8 @@ class SimDINOv2Loss(torch.nn.Module):
                 )
             if patch_mask is None:
                 raise ValueError(
-                    "patch_mask is required to normalize the masked patch loss, got None"
+                    "patch_mask is required to normalize the masked patch loss, "
+                    "got None"
                 )
             loss_patch = self.masked_patch_loss(
                 student_patch_feats, teacher_patch_feats, patch_mask, masks_weight
