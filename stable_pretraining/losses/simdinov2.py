@@ -136,15 +136,9 @@ class SimDINOv2Loss(torch.nn.Module):
         scalar = p / (m * self.world_size * self.eps)
         eye = torch.eye(p, device=cov.device, dtype=torch.float32)
         # 0.5 * logdet(A) = sum(log(diag(L))) via the Cholesky factor A = L L^T.
-        # Evaluated in float32 for numerical stability.
-        loss = sum(
-            torch.linalg.cholesky_ex(eye + scalar * cov[i].float())[0]
-            .diagonal()
-            .log()
-            .sum()
-            for i in range(n_views)
-        )
-        loss = loss / n_views
+        # Vectorized across all views and evaluated in float32 for stability.
+        chol, _ = torch.linalg.cholesky_ex(eye + scalar * cov.float())
+        loss = chol.diagonal(dim1=-2, dim2=-1).log().sum(dim=-1).mean()
         return loss * (p + self.world_size * m) / (p * self.world_size * m)
 
     def compression_loss(
