@@ -35,32 +35,14 @@ Note:
 from typing import Optional, Tuple
 
 import torch
-import torch.distributed as dist
 import torch.nn.functional as F
+
+from ..utils import all_reduce, get_world_size
 
 
 def _half_logdet(x: torch.Tensor) -> torch.Tensor:
     """Return ``0.5 * logdet(x)`` via the Cholesky factor."""
     return torch.linalg.cholesky_ex(x)[0].diagonal().log().sum()
-
-
-def _all_reduce_cov(cov: torch.Tensor) -> torch.Tensor:
-    """Sum per-view covariances across ranks, preserving gradient flow.
-
-    Args:
-        cov: Per-view covariance matrices ``[n_views, p, p]``.
-
-    Returns:
-        Covariance matrices summed over all ranks, same shape.
-    """
-    try:
-        from torch.distributed.nn.functional import all_reduce
-
-        return all_reduce(cov)
-    except ImportError:  # pragma: no cover - torch always ships this today
-        summed = cov.detach().clone()
-        dist.all_reduce(summed)
-        return summed + (cov - cov.detach())
 
 
 class SimDINOv2Loss(torch.nn.Module):
@@ -134,11 +116,7 @@ class SimDINOv2Loss(torch.nn.Module):
     @property
     def world_size(self) -> int:
         """Number of distributed ranks, or 1 when not running distributed."""
-        return (
-            dist.get_world_size()
-            if dist.is_available() and dist.is_initialized()
-            else 1
-        )
+        return get_world_size()
 
     def expansion_loss(self, feats: torch.Tensor) -> torch.Tensor:
         """Estimate the Gaussian coding rate of ``feats`` from its Gram matrix.
@@ -158,7 +136,7 @@ class SimDINOv2Loss(torch.nn.Module):
         n_views, m, p = feats.shape
         cov = torch.einsum("nbc,nbd->ncd", feats, feats)
         if self.reduce_cov and self.world_size > 1:
-            cov = _all_reduce_cov(cov)
+            cov = all_reduce(cov)
 
         scalar = p / (m * self.world_size * self.eps)
         eye = torch.eye(p, device=cov.device, dtype=torch.float32)
