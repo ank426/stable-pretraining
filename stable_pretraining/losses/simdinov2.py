@@ -128,7 +128,7 @@ class SimDINOv2Loss(torch.nn.Module):
         Returns:
             Scalar coding-rate estimate.
         """
-        n_views, m, p = feats.shape
+        _, m, p = feats.shape
         cov = torch.einsum("nbc,nbd->ncd", feats, feats)
         if self.reduce_cov and self.world_size > 1:
             cov = all_reduce(cov)
