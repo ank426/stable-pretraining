@@ -95,7 +95,6 @@ def _place_blocks(
         int: Bitmask over ``height * width`` cells, bit ``i * width + j`` set when
         cell ``(i, j)`` is masked.
     """
-    n_cells = height * width
     lo, hi = log_aspect_ratio
     bits = 0
     count = 0
@@ -118,7 +117,7 @@ def _place_blocks(
                     block |= row_bits << ((top + row) * width)
 
                 fresh = (~bits) & block
-                n_fresh = bin(fresh).count("1")
+                n_fresh = fresh.bit_count()
                 if 0 < n_fresh <= budget:
                     bits |= fresh
                     delta = n_fresh
@@ -129,7 +128,7 @@ def _place_blocks(
             break
         count += delta
 
-    assert bits < (1 << n_cells), "bitmask overflowed the grid"
+    assert bits < 1 << (height * width), "bitmask overflowed the grid"
     return bits
 
 
@@ -144,7 +143,9 @@ def _bits_to_row(bits: int, n_cells: int) -> list[int]:
     return [(bits >> cell) & 1 for cell in range(n_cells)]
 
 
-def _log_aspect_bounds(min_aspect: float, max_aspect: float | None):
+def _log_aspect_bounds(
+    min_aspect: float, max_aspect: float | None
+) -> Tuple[float, float]:
     if min_aspect <= 0:
         raise ValueError(f"min_aspect must be positive, got {min_aspect}")
     if max_aspect is None:
@@ -290,7 +291,7 @@ class SimDINOv2Output(ModelOutput):
 
 def _split_cls_patches(
     features: torch.Tensor, has_cls: bool
-) -> Tuple[torch.Tensor, ...]:
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """Split a token sequence into ``(cls, patches)``.
 
     Args:
@@ -518,7 +519,7 @@ class SimDINOv2(Module):
             )
         return side, side
 
-    def _encode(self, vit, images, mask=None):
+    def _encode(self, vit, images, mask=None) -> torch.Tensor:
         x = vit.patch_embed(images)
         # With ``dynamic_img_size=True`` patch_embed returns 4D [B, H', W', D]
         # and ``_pos_embed`` *requires* 4D. For the mask substitution we
@@ -528,9 +529,9 @@ class SimDINOv2(Module):
             if is_4d:
                 B_, H_, W_, D_ = x.shape
                 x = x.reshape(B_, H_ * W_, D_)
-            # ``1 - m`` needs a float mask; these arrive bool (True = masked).
-            m = mask.unsqueeze(-1).to(x.dtype)
-            x = x * (1 - m) + self.mask_token.expand_as(x) * m
+            # ``True`` (masked) positions get the mask token; ``.to(x.dtype)``
+            # keeps the substitution in the autocast dtype.
+            x = torch.where(mask.unsqueeze(-1), self.mask_token.to(x.dtype), x)
             if is_4d:
                 x = x.reshape(B_, H_, W_, D_)
         x = vit._pos_embed(x)
@@ -608,9 +609,6 @@ class SimDINOv2(Module):
         B = global_views[0].shape[0]
         n_rows = n_global * B
 
-        # Locals first: ``SimDINOv2Loss`` reads ``student[:2]`` for the expansion
-        # term and for the no_diag exclusion, and upstream feeds it local crops
-        # there.
         mask = self._global_mask(n_rows, global_imgs.device)
 
         with torch.no_grad():
@@ -629,6 +627,9 @@ class SimDINOv2(Module):
             s_feats_l = self._encode(self.backbone.student, local_imgs, mask=None)
             s_cls_l, _ = _split_cls_patches(s_feats_l, self._has_cls)
             s_cls_feats_l = self.cls_head.forward_student(s_cls_l).view(n_local, B, -1)
+            # Locals first: ``SimDINOv2Loss`` reads ``student[:2]`` for the
+            # expansion term and the no_diag exclusion, and upstream feeds it
+            # local crops there.
             s_cls_feats = torch.cat([s_cls_feats_l, s_cls_feats_g], dim=0)
         else:
             s_cls_feats = s_cls_feats_g
