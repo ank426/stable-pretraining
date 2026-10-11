@@ -196,7 +196,7 @@ def _simdinov2_patch_masks(
         mask_sample_probability: Fraction of rows that receive a mask. Default is
             0.5, the official value.
         max_num_patches: Cap on a single block's area. Defaults to
-            ``int(0.5 * n_patches)``.
+            ``n_patches // 2``.
         min_num_patches: Lower bound of a block's target area. Default is 4.
         min_aspect: Minimum block aspect ratio. Default is 0.3.
         max_aspect: Maximum block aspect ratio. Defaults to ``1 / min_aspect``.
@@ -241,7 +241,7 @@ def _simdinov2_patch_masks(
     if min_num_patches < 1:
         raise ValueError(f"min_num_patches must be >= 1, got {min_num_patches}")
     if max_num_patches is None:
-        max_num_patches = int(0.5 * n_patches)
+        max_num_patches = n_patches // 2
     if max_num_patches < 1:
         raise ValueError(f"max_num_patches must be >= 1, got {max_num_patches}")
     aspect_bounds = _log_aspect_bounds(min_aspect, max_aspect)
@@ -374,7 +374,7 @@ class SimDINOv2(Module):
         receive a mask at all (default 0.5, the official value). Because the loss
         normalizes by row count, this also acts as a scale factor on the patch
         term.
-    :param max_num_patches: Cap on one block's area; defaults to ``0.5 * N``.
+    :param max_num_patches: Cap on one block's area; defaults to ``N // 2``.
     :param min_num_patches: Lower bound on a block's area (default 4).
     :param min_aspect: Minimum block aspect ratio (default 0.3).
     :param max_aspect: Maximum block aspect ratio; defaults to ``1 / min_aspect``.
@@ -514,7 +514,7 @@ class SimDINOv2(Module):
         if pe.ndim == 4:
             return pe.shape[1], pe.shape[2]
         n = pe.shape[1]
-        side = int(round(n**0.5))
+        side = math.isqrt(n)
         if side * side != n:
             raise ValueError(
                 f"cannot infer a square patch grid from {n} patches; "
