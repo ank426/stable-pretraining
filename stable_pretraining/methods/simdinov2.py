@@ -132,15 +132,21 @@ def _place_blocks(
     return bits
 
 
-def _bits_to_row(bits: int, n_cells: int) -> list[int]:
-    """Unpack a bitmask into a row-major list of ``n_cells`` 0/1 values.
+def _unpack_masks(rows: list[int], n_patches: int) -> torch.Tensor:
+    """Unpack row bitmasks into a ``[len(rows), n_patches]`` bool tensor.
 
     Single source of truth for bit layout: cell ``c`` lives at bit ``c``, where
     ``c = row * width + col``. Anything that unpacks a bitmask must go through
     here -- re-deriving the index arithmetic is how a driver ends up reading
-    every ``width``-th bit.
+    every ``width``-th bit. Each int is written little-endian and unpacked
+    LSB-first within every byte, matching ``(bits >> c) & 1``.
     """
-    return [(bits >> cell) & 1 for cell in range(n_cells)]
+    n_bytes = (n_patches + 7) // 8
+    buf = bytearray(b"".join(row.to_bytes(n_bytes, "little") for row in rows))
+    packed = torch.frombuffer(buf, dtype=torch.uint8).view(len(rows), n_bytes)
+    shifts = torch.arange(8, dtype=torch.uint8)
+    bits = (packed.unsqueeze(-1) >> shifts) & 1
+    return bits.reshape(len(rows), n_bytes * 8)[:, :n_patches].bool()
 
 
 def _log_aspect_bounds(
@@ -270,10 +276,7 @@ def _simdinov2_patch_masks(
     # stacking then permuting: it decides *which* rows get masked, not what
     # shape those masks have.
     order = torch.randperm(n_rows, generator=generator).tolist()
-    return torch.tensor(
-        [_bits_to_row(rows[i], n_patches) for i in order],
-        dtype=torch.bool,
-    )
+    return _unpack_masks([rows[i] for i in order], n_patches)
 
 
 @dataclass
