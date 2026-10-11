@@ -40,11 +40,6 @@ import torch.nn.functional as F
 from ..utils import all_reduce, get_world_size
 
 
-def _half_logdet(x: torch.Tensor) -> torch.Tensor:
-    """Return ``0.5 * logdet(x)`` via the Cholesky factor."""
-    return torch.linalg.cholesky_ex(x)[0].diagonal().log().sum()
-
-
 class SimDINOv2Loss(torch.nn.Module):
     """SimDINOv2 loss: cosine compression, coding-rate expansion, masked patches.
 
@@ -140,7 +135,15 @@ class SimDINOv2Loss(torch.nn.Module):
 
         scalar = p / (m * self.world_size * self.eps)
         eye = torch.eye(p, device=cov.device, dtype=torch.float32)
-        loss = sum(_half_logdet(eye + scalar * cov[i].float()) for i in range(n_views))
+        # 0.5 * logdet(A) = sum(log(diag(L))) via the Cholesky factor A = L L^T.
+        # Evaluated in float32 for numerical stability.
+        loss = sum(
+            torch.linalg.cholesky_ex(eye + scalar * cov[i].float())[0]
+            .diagonal()
+            .log()
+            .sum()
+            for i in range(n_views)
+        )
         loss = loss / n_views
         return loss * (p + self.world_size * m) / (p * self.world_size * m)
 
