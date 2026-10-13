@@ -23,24 +23,6 @@ from stable_pretraining.data import transforms
 from stable_pretraining.methods.simdinov2 import SimDINOv2
 
 
-class _ImagenetteDictDataset(torch.utils.data.Dataset):
-    """Dictionary-wrapped Imagenette dataset compatible with MultiViewTransform."""
-
-    def __init__(self, root: str, split: str, transform=None):
-        self.ds = dset.Imagenette(root, split=split, size="320px", download=True)
-        self.transform = transform
-
-    def __len__(self) -> int:
-        return len(self.ds)
-
-    def __getitem__(self, idx: int) -> dict:
-        img, label = self.ds[idx]
-        sample = {"image": img, "label": label}
-        if self.transform is not None:
-            sample = self.transform(sample)
-        return sample
-
-
 def make_simdinov2_data(
     batch_size: int = 128, num_workers: int = 8, n_global: int = 2, n_local: int = 6
 ):
@@ -51,8 +33,18 @@ def make_simdinov2_data(
             **{f"local_{i}": _local_t() for i in range(n_local)},
         }
     )
-    train_ds = _ImagenetteDictDataset(data_dir, split="train", transform=train_t)
-    val_ds = _ImagenetteDictDataset(data_dir, split="val", transform=val_transform())
+    train_ds = spt.data.FromTorchDataset(
+        dset.Imagenette(data_dir, split="train", size="320px", download=True),
+        names=["image", "label"],
+        transform=train_t,
+        add_sample_idx=False,
+    )
+    val_ds = spt.data.FromTorchDataset(
+        dset.Imagenette(data_dir, split="val", size="320px", download=True),
+        names=["image", "label"],
+        transform=val_transform(),
+        add_sample_idx=False,
+    )
 
     return spt.data.DataModule(
         train=torch.utils.data.DataLoader(
